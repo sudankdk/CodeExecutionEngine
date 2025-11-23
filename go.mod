@@ -3,7 +3,7 @@ module github.com/sudankdk/ceev2
 go 1.24.10
 
 require (
-	github.com/gofiber/fiber/v2 v2.52.9
+	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/google/uuid v1.6.0
 )
 

@@ -1,0 +1,17 @@
+{
+  "python": {
+    "image": "cee-python",
+    "entry": "/entrypoint.sh",
+    "extension": ".py"
+  },
+  "node": {
+    "image": "cee-node",
+    "entry": "/entrypoint.sh",
+    "extension": ".js"
+  },
+  "go": {
+    "image": "go:latest",
+    "entry": "/entrypoint.sh",
+    "extension": ".go"
+  }
+}

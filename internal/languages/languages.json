@@ -10,7 +10,7 @@
     "extension": ".js"
   },
   "go": {
-    "image": "go:latest",
+    "image": "cee-go",
     "entry": "/entrypoint.sh",
     "extension": ".go"
   }

@@ -13,11 +13,13 @@ type Config struct {
 // codeFilename: relative path inside container (e.g. /run/main.py)
 func NewConfig(codeDir, codeFilename, stdinFilename, lang string) Config {
     var cmd []string
+    readonly:= true
     switch lang {
     case "python":
         cmd = []string{ codeFilename, stdinFilename}
     case "go":
         cmd = []string{codeFilename, stdinFilename}
+        readonly=false
     case "node":
         cmd = []string{codeFilename ,stdinFilename}
     }
@@ -27,7 +29,7 @@ func NewConfig(codeDir, codeFilename, stdinFilename, lang string) Config {
         Memory:         256 * 1024 * 1024,
         CPU:            500_000_000,
         Binds:          []string{codeDir + ":/run/code:ro"},
-        ReadonlyRootfs: true,
+        ReadonlyRootfs: readonly,
     }
 }
 

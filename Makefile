@@ -11,3 +11,5 @@ build-all: build-python build-node build-go
 
 
 checker-node: docker run --rm -it --entrypoint ls cee-node -l /entrypoint.sh
+
+tester :  go test ./internal/docker -v

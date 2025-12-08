@@ -94,11 +94,11 @@ func (pm *PoolManager) EnsureImage(ctx context.Context, imageName string) error 
 func (pm *PoolManager) StartPool(ctx context.Context) error {
 	for i := 0; i < pm.PoolSize; i++ {
 		// start the container
-		if err:=pm.StartContainer(ctx);err != nil {
+		if err := pm.StartContainer(ctx); err != nil {
 			return err
 		}
 	}
-	// start health checker maybe with go routine 
+	// start health checker maybe with go routine
 	return nil
 }
 
@@ -139,4 +139,58 @@ func (pm *PoolManager) StartContainer(ctx context.Context) error {
 	pm.Pool <- resp.ID
 	log.Printf("started container %s for image %s", resp.ID[:12], pm.Image)
 	return nil
+}
+
+// check conatiner health in frequent duration and restart the bad ones and also logs the bad ones
+func (pm *PoolManager) Healthchecker() {
+
+	ticker := time.NewTicker(pm.HealthFreq)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-pm.Stopch:
+			return
+
+		case <-ticker.C:
+			pm.Mu.Lock()
+			for id, v := range pm.Containers {
+
+				go func(id string, info *ConatainerInfo) {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					_, err := pm.Cli.ContainerInspect(ctx, id)
+					if err != nil {
+						log.Printf("container %s unhealthy, restarting: %v", id[:12], err)
+
+						// restart the container
+						pm.RestartContainer(ctx, id)
+					} else {
+						pm.Mu.Lock()
+						info.LastCheck = time.Now()
+						pm.Mu.Unlock()
+					}
+				}(id, v)
+			}
+			pm.Mu.Unlock()
+		}
+	}
+}
+
+func (pm *PoolManager) RestartContainer(ctx context.Context, id string) {
+	pm.Mu.Lock()
+	if c, ok := pm.Containers[id]; ok {
+		c.Busy = true
+	}
+	pm.Mu.Unlock()
+
+	// first stop ani delete and recreate
+	_ = pm.Cli.ContainerStop(ctx, id, container.StopOptions{})
+	_ = pm.Cli.ContainerRemove(ctx, id, container.RemoveOptions{})
+	pm.Mu.Lock()
+	delete(pm.Containers, id)
+	pm.Mu.Unlock()
+	if err := pm.StartContainer(ctx); err != nil {
+		log.Printf("failed to recreate container: %v", err)
+
+	}
 }

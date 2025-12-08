@@ -194,3 +194,9 @@ func (pm *PoolManager) RestartContainer(ctx context.Context, id string) {
 
 	}
 }
+
+
+func (pm *PoolManager) ExecRunner(ctx context.Context, id string, files map[string][]byte , command []string, timeout time.Duration) (stdout, stderr []byte, exitCode int, err error){
+	//copy files to container
+	//create exec 
+}

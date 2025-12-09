@@ -26,7 +26,7 @@ func NewConfig(codeDir, codeFilename, stdinFilename, lang string) Config {
 
     return Config{
         Cmd:            cmd,
-        Memory:         256 * 1024 * 1024,
+        Memory:         512 * 1024 * 1024,
         CPU:            500_000_000,
         Binds:          []string{codeDir + ":/run/code:ro"},
         ReadonlyRootfs: readonly,

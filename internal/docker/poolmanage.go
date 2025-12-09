@@ -1,10 +1,14 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -195,8 +199,91 @@ func (pm *PoolManager) RestartContainer(ctx context.Context, id string) {
 	}
 }
 
-
-func (pm *PoolManager) ExecRunner(ctx context.Context, id string, files map[string][]byte , command []string, timeout time.Duration) (stdout, stderr []byte, exitCode int, err error){
+func (pm *PoolManager) ExecRunner(ctx context.Context, id string, files map[string][]byte, command []string, timeout time.Duration) (stdout, stderr []byte, exitCode int, err error) {
 	//copy files to container
-	//create exec 
+	if err := pm.CopyFilesToContainer(ctx, id, files, pm.Workspace); err != nil {
+		return nil, nil, -1, err
+	}
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+
+	defer cancel()
+	//create exec
+	execResp, err := pm.Cli.ContainerExecCreate(execCtx, id, container.ExecOptions{
+		Cmd:          command,
+		AttachStdin:  true,
+		AttachStdout: true,
+		WorkingDir:   pm.Workspace,
+		Env:          []string{},
+	})
+	if err != nil {
+		return nil, nil, -1, err
+	}
+	respAttach, err := pm.Cli.ContainerExecAttach(execCtx, execResp.ID, container.ExecStartOptions{})
+
+	if err != nil {
+		return nil, nil, -1, err
+	}
+
+	defer respAttach.Close()
+	var outBuf, errBuf bytes.Buffer
+
+	_, err = io.Copy(&outBuf, respAttach.Reader)
+	if err != nil && !strings.Contains(err.Error(), "context deadline exceeded") {
+		log.Println("exec copy error:", err)
+	}
+	inspect, err := pm.Cli.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return outBuf.Bytes(), errBuf.Bytes(), -1, err
+	}
+
+	// Docker doesn't separate stderr easily without stdcopy; for simplicity return combined output as stdout
+	return outBuf.Bytes(), nil, inspect.ExitCode, nil
+}
+
+func (pm *PoolManager) CopyFilesToContainer(ctx context.Context, containerId string, files map[string][]byte, destDir string) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for name, content := range files {
+		hdr := &tar.Header{
+			Name: filepath.Join(destDir, name),
+			Mode: 0644,
+			Size: int64(len(content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			tw.Close()
+			return err
+		}
+		if _, err := tw.Write(content); err != nil {
+			tw.Close()
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+
+	return pm.Cli.CopyToContainer(ctx, containerId, "/", &buf, container.CopyToContainerOptions{AllowOverwriteDirWithFile: true})
+
+}
+
+func (pm *PoolManager) CleanWorkspace(ctx context.Context, containerID string) error {
+	cmd := []string{"bash", "-lc", fmt.Sprintf("rm -rf %s/*", pm.Workspace)}
+	_, _, _, err := pm.ExecRunner(ctx, containerID, nil, cmd, 5*time.Second)
+	return err
+}
+
+func (pm *PoolManager) Shutdown(ctx context.Context) {
+	close(pm.Stopch)
+	pm.Mu.Lock()
+	ids := make([]string, 0, len(pm.Containers))
+	for id := range pm.Containers {
+		ids = append(ids, id)
+	}
+	pm.Mu.Unlock()
+	for _, id := range ids {
+		timeout := 2
+		_ = pm.Cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
+		_ = pm.Cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
+	}
+	pm.Cli.Close()
 }

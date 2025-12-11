@@ -6,10 +6,6 @@ WORKDIR /app
 
 RUN apk add --no-cache \
     bash \
-    git \
-    ca-certificates \
-    busybox-extras \
-    tini \
     dos2unix
 
 COPY entrypoint.sh /entrypoint.sh

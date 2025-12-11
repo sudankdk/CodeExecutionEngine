@@ -6,17 +6,17 @@ import (
 )
 
 type Server struct {
-	exec   *executer.Executor
+	exec *executer.Executor
 }
 
 func NewServer(exec *executer.Executor) *Server {
 	return &Server{exec: exec}
 }
 
-func(s *Server) StartServer() {
+func (s *Server) StartServer() error {
 	app := fiber.New()
 
 	s.setupRoutes(app)
 
-	app.Listen(":3000")
+	return app.Listen(":3000")
 }

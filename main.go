@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -17,6 +18,16 @@ func main(){
 	}
 	dc := docker.New()
 	exec := executer.NewExecutor(dc, langs)
+	ctx,cancel := context.WithCancel(context.Background())
+	go func(){
+		if err:=dc.DeleteZombieContainer(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}()
 	server:=api.NewServer(exec)
-	server.StartServer()
+	if err = server.StartServer(); err !=nil {
+		cancel()
+		log.Println("Error in server starting")
+	}
+
 }

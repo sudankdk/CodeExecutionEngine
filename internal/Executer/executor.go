@@ -3,7 +3,6 @@ package executer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 
 	"github.com/sudankdk/ceev2/internal/docker"
@@ -27,7 +26,7 @@ type Response struct {
 
 type Executor struct {
 	docker *docker.Client
-	langs languages.LanguageMap
+	langs  languages.LanguageMap
 }
 
 func NewExecutor(d *docker.Client, lang languages.LanguageMap) *Executor {
@@ -45,25 +44,20 @@ func (e *Executor) Run(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	defer utils.CleanupFiles(files.Dir)
-	fmt.Println(files.CodePath,files.StdinPath)
-	
+
 	//enuser image presents
-	codeFileName:= "/run/code/"+filepath.Base(files.CodePath)
-	stdInFileName:= "/run/code/"+filepath.Base(files.StdinPath)
-	fmt.Println(codeFileName,stdInFileName)
+	codeFileName := "/run/code/" + filepath.Base(files.CodePath)
+	stdInFileName := "/run/code/" + filepath.Base(files.StdinPath)
 	// codeFileName := "/run/code/main.py"
 	// stdInFileName := "/run/code/stdin.txt"
 
-	sb := sandbox.NewConfig(files.Dir, codeFileName, stdInFileName,req.Language)
-
+	sb := sandbox.NewConfig(files.Dir, codeFileName, stdInFileName, req.Language)
 
 	// Run container using your Docker client
-	res,err:=e.docker.Run(ctx,langCfg.Image,sb)
+	res, err := e.docker.Run(ctx, langCfg.Image, sb)
 	if err != nil {
 		return nil, err
 	}
-
-	
 
 	return &Response{
 		Stdout:   res.Stdout,

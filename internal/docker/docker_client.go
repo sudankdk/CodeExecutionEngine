@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-units"
 	"github.com/sudankdk/ceev2/internal/sandbox"
 )
 
@@ -33,9 +37,35 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 			Cmd:   sb.Cmd,
 		},
 		&container.HostConfig{
-			AutoRemove:     false,
-			Binds:          sb.Binds,
-			Resources:      container.Resources{Memory: sb.Memory, NanoCPUs: sb.CPU},
+			AutoRemove: false,
+			Binds:      sb.Binds,
+			Resources: container.Resources{
+				Memory:   sb.Memory,
+				NanoCPUs: sb.CPU,
+				Ulimits: []*units.Ulimit{
+					{
+						Name: "nproc",
+						Soft: 64,
+						Hard: 128,
+					},
+					{
+						Name: "nofile",
+						Soft: 64,
+						Hard: 128,
+					},
+					{
+						Name: "core",
+						Soft: 0,
+						Hard: 0,
+					},
+					{
+						// Maximum file size that can be created by the process (output file in our case)
+						Name: "fsize",
+						Soft: 20 * 1024 * 1024,
+						Hard: 20 * 1024 * 1024,
+					},
+				},
+			},
 			ReadonlyRootfs: sb.ReadonlyRootfs,
 			NetworkMode:    "none",
 		},
@@ -48,8 +78,9 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 	if err := c.d.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return Result{}, err
 	}
-
-	statusCh, errCh := c.d.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	execCtx, cancel := context.WithTimeout(ctx, sb.Timeout)
+	defer cancel()
+	statusCh, errCh := c.d.ContainerWait(execCtx, resp.ID, container.WaitConditionNotRunning)
 
 	var waitResp container.WaitResponse
 
@@ -59,6 +90,9 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 			return Result{}, fmt.Errorf("container wait error: %w", err)
 		}
 	case waitResp = <-statusCh:
+	case <-execCtx.Done():
+		c.d.ContainerKill(ctx, resp.ID, "SIGKILL")
+		return Result{}, fmt.Errorf("execution timed out after %s", sb.Timeout)
 	}
 
 	logReader, err := c.d.ContainerLogs(ctx, resp.ID, container.LogsOptions{
@@ -86,4 +120,23 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 		Stderr:   stderr.String(),
 		ExitCode: int(waitResp.StatusCode),
 	}, nil
+}
+
+func (c *Client) DeleteZombieContainer(ctx context.Context) error {
+	ticker := time.NewTicker(50 * time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("stopping the zombie cleanup process")
+			return nil
+
+		case <-ticker.C:
+			report, err := c.d.ContainersPrune(ctx, filters.Args{})
+			if err != nil {
+				log.Println("failed to prune containers")
+				return err
+			}
+			log.Printf("prune successful, pruned %v containers", len(report.ContainersDeleted))
+		}
+	}
 }

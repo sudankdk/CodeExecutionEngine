@@ -30,7 +30,7 @@ type Result struct {
 	ExitCode int
 }
 
-func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Result, error) {
+func (c *Client) CreateContainer(ctx context.Context, sb sandbox.Config, image string) (container.CreateResponse, error) {
 	resp, err := c.d.ContainerCreate(ctx,
 		&container.Config{
 			Image: image,
@@ -71,6 +71,11 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 		},
 		nil, nil, "",
 	)
+	return resp, err
+}
+
+func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Result, error) {
+	resp, err := c.CreateContainer(ctx, sb, image)
 	if err != nil {
 		return Result{}, err
 	}
@@ -131,7 +136,10 @@ func (c *Client) DeleteZombieContainer(ctx context.Context) error {
 			return nil
 
 		case <-ticker.C:
-			report, err := c.d.ContainersPrune(ctx, filters.Args{})
+			f := filters.NewArgs()
+			f.Add("label", "pool!=true")
+
+			report, err := c.d.ContainersPrune(ctx, f)
 			if err != nil {
 				log.Println("failed to prune containers")
 				return err

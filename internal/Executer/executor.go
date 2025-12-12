@@ -25,8 +25,9 @@ type Response struct {
 }
 
 type Executor struct {
-	docker *docker.Client
-	langs  languages.LanguageMap
+	docker  *docker.Client
+	pooling *docker.PoolManager
+	langs   languages.LanguageMap
 }
 
 func NewExecutor(d *docker.Client, lang languages.LanguageMap) *Executor {
@@ -38,6 +39,8 @@ func (e *Executor) Run(ctx context.Context, req Request) (*Response, error) {
 	if !ok {
 		return nil, errors.New("unsupported language")
 	}
+	pc := e.pooling.Acquire()
+	defer e.pooling.Release(pc)
 
 	files, err := utils.Save(req.Code, req.Stdin, langCfg.Ext)
 	if err != nil {

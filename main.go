@@ -17,8 +17,10 @@ func main(){
 		log.Fatalf("failed to load languages: %v", err)
 	}
 	dc := docker.New()
+	pooling := docker.NewPoolManager(dc)
 	exec := executer.NewExecutor(dc, langs)
 	ctx,cancel := context.WithCancel(context.Background())
+	pooling.PreWarm(ctx,langs)
 	go func(){
 		if err:=dc.DeleteZombieContainer(ctx); err != nil {
 			log.Fatal(err)

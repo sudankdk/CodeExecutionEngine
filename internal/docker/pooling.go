@@ -19,6 +19,7 @@ type PoolContainer struct {
 	ID       string
 	Status   string
 	LastUsed time.Time
+	Image    string
 }
 
 func NewPoolManager(c *Client) *PoolManager {
@@ -33,11 +34,12 @@ func (pm *PoolManager) createPoolContainer(ctx context.Context, image string) (s
 		ctx,
 		&container.Config{
 			Image: image,
-			Cmd:   []string{"/bin/sh", "-c", "tail -f /dev/null"},
+			Cmd:   []string{"tail", "-f", "/dev/null"},
 			Labels: map[string]string{
 				"pool":       "true",
 				"pool.image": image,
 			},
+			Entrypoint: []string{},
 		},
 		&container.HostConfig{
 			AutoRemove:  false,
@@ -71,6 +73,7 @@ func (pm *PoolManager) PreWarm(ctx context.Context, langs languages.LanguageMap)
 				ID:       id,
 				Status:   "idle",
 				LastUsed: time.Now(),
+				Image:    lang.Image,
 			}
 			pm.mu.Unlock()
 		}
@@ -78,12 +81,12 @@ func (pm *PoolManager) PreWarm(ctx context.Context, langs languages.LanguageMap)
 	return nil
 }
 
-func (pm *PoolManager) Acquire() *PoolContainer {
+func (pm *PoolManager) Acquire(image string) *PoolContainer {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
 	for _, cont := range pm.pool {
-		if cont.Status == "idle" {
+		if cont.Status == "idle" && cont.Image == image {
 			cont.Status = "busy"
 			return cont
 		}
@@ -97,6 +100,3 @@ func (pm *PoolManager) Release(cont *PoolContainer) {
 	cont.LastUsed = time.Now()
 	pm.mu.Unlock()
 }
-
-
-//todo : exec in existing container

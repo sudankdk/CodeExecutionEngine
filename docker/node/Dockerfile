@@ -1,20 +1,19 @@
-# Use official Node.js LTS Alpine image
 FROM node:20-alpine
 
-# Install dos2unix and bash
-RUN apk add --no-cache dos2unix bash
+RUN addgroup -S runner && adduser -S runner -G runner
 
-# Set working directory inside container
 WORKDIR /app
 
-# Copy entrypoint script
+RUN apk add --no-cache bash dos2unix
+
+# Create the /run/code directory
+RUN mkdir -p /run/code && chown -R runner:runner /run/code
+
 COPY entrypoint.sh /entrypoint.sh
+RUN dos2unix /entrypoint.sh && chmod +x /entrypoint.sh
 
-# Convert line endings to Unix
-RUN dos2unix /entrypoint.sh
+RUN chown -R runner:runner /app /entrypoint.sh
 
-# Make entrypoint executable
-RUN chmod +x /entrypoint.sh
+USER runner
 
-# Use the entrypoint script
 ENTRYPOINT ["/entrypoint.sh"]

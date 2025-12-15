@@ -10,7 +10,8 @@ import (
 	"github.com/sudankdk/ceev2/internal/docker"
 	"github.com/sudankdk/ceev2/internal/languages"
 )
-func main(){
+
+func main() {
 	fmt.Println("on some bullshit")
 	langs, err := languages.Load("internal/languages/languages.json")
 	if err != nil {
@@ -18,16 +19,13 @@ func main(){
 	}
 	dc := docker.New()
 	pooling := docker.NewPoolManager(dc)
-	exec := executer.NewExecutor(dc, langs)
-	ctx,cancel := context.WithCancel(context.Background())
-	pooling.PreWarm(ctx,langs)
-	go func(){
-		if err:=dc.DeleteZombieContainer(ctx); err != nil {
-			log.Fatal(err)
-		}
-	}()
-	server:=api.NewServer(exec)
-	if err = server.StartServer(); err !=nil {
+	exec := executer.NewExecutor(dc, langs, pooling)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pooling.PreWarm(ctx, langs)
+	// Removed zombie cleanup for now
+	server := api.NewServer(exec)
+	if err = server.StartServer(); err != nil {
 		cancel()
 		log.Println("Error in server starting")
 	}

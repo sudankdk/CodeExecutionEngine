@@ -30,8 +30,8 @@ type Executor struct {
 	langs   languages.LanguageMap
 }
 
-func NewExecutor(d *docker.Client, lang languages.LanguageMap) *Executor {
-	return &Executor{docker: d, langs: lang}
+func NewExecutor(d *docker.Client, lang languages.LanguageMap, p *docker.PoolManager) *Executor {
+	return &Executor{docker: d, langs: lang, pooling: p}
 }
 
 func (e *Executor) Run(ctx context.Context, req Request) (*Response, error) {
@@ -39,7 +39,7 @@ func (e *Executor) Run(ctx context.Context, req Request) (*Response, error) {
 	if !ok {
 		return nil, errors.New("unsupported language")
 	}
-	pc := e.pooling.Acquire()
+	pc := e.pooling.Acquire(langCfg.Image)
 	defer e.pooling.Release(pc)
 
 	files, err := utils.Save(req.Code, req.Stdin, langCfg.Ext)
@@ -56,12 +56,21 @@ func (e *Executor) Run(ctx context.Context, req Request) (*Response, error) {
 
 	sb := sandbox.NewConfig(files.Dir, codeFileName, stdInFileName, req.Language)
 
-	// Run container using your Docker client
-	res, err := e.docker.Run(ctx, langCfg.Image, sb)
-	if err != nil {
+	// Copy files to the container
+	if err := e.docker.CopyFilesToContainer(ctx, pc.ID, files.Dir); err != nil {
 		return nil, err
 	}
 
+	// Run container using your Docker client
+	// res, err := e.docker.Run(ctx, langCfg.Image, sb)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	res, err := e.docker.ExecInExistingContainer(ctx, pc.ID, sb)
+	if err != nil {
+		return nil, err
+	}
 	return &Response{
 		Stdout:   res.Stdout,
 		Stderr:   res.Stderr,

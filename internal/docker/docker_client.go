@@ -1,10 +1,13 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -34,7 +37,7 @@ func (c *Client) CreateContainer(ctx context.Context, sb sandbox.Config, image s
 	resp, err := c.d.ContainerCreate(ctx,
 		&container.Config{
 			Image: image,
-			Cmd:   sb.Cmd,
+			Cmd:   sb.ExecCmd,
 		},
 		&container.HostConfig{
 			AutoRemove: false,
@@ -71,6 +74,9 @@ func (c *Client) CreateContainer(ctx context.Context, sb sandbox.Config, image s
 		},
 		nil, nil, "",
 	)
+	if err := c.d.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return resp, err
+	}
 	return resp, err
 }
 
@@ -80,9 +86,6 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 		return Result{}, err
 	}
 
-	if err := c.d.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return Result{}, err
-	}
 	execCtx, cancel := context.WithTimeout(ctx, sb.Timeout)
 	defer cancel()
 	statusCh, errCh := c.d.ContainerWait(execCtx, resp.ID, container.WaitConditionNotRunning)
@@ -128,23 +131,162 @@ func (c *Client) Run(ctx context.Context, image string, sb sandbox.Config) (Resu
 }
 
 func (c *Client) DeleteZombieContainer(ctx context.Context) error {
-	ticker := time.NewTicker(50 * time.Second)
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("stopping the zombie cleanup process")
+			log.Println("zombie cleanup stopped")
 			return nil
 
 		case <-ticker.C:
-			f := filters.NewArgs()
-			f.Add("label", "pool!=true")
-
-			report, err := c.d.ContainersPrune(ctx, f)
+			containers, err := c.d.ContainerList(ctx, container.ListOptions{
+				All: true,
+				Filters: filters.NewArgs(
+					filters.Arg("status", "exited"),
+					filters.Arg("label", "pool!=true"),
+				),
+			})
 			if err != nil {
-				log.Println("failed to prune containers")
-				return err
+				log.Printf("container list failed: %v", err)
+				continue
 			}
-			log.Printf("prune successful, pruned %v containers", len(report.ContainersDeleted))
+
+			for _, ctr := range containers {
+				err := c.d.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{
+					Force: true,
+				})
+				if err != nil {
+					log.Printf("failed to remove %s: %v", ctr.ID[:12], err)
+					continue
+				}
+				log.Printf("removed zombie container %s", ctr.ID[:12])
+			}
 		}
 	}
+}
+
+func (c *Client) CopyFilesToContainer(ctx context.Context, containerID string, hostDir string) error {
+	// Create a tar archive of the files in hostDir
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// First, create the /run/code directory in the tar
+	hdr := &tar.Header{
+		Name:     "code/",
+		Mode:     0755,
+		Typeflag: tar.TypeDir,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+
+	files, err := os.ReadDir(hostDir)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		filePath := filepath.Join(hostDir, file.Name())
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+
+		hdr := &tar.Header{
+			Name: "code/" + file.Name(),
+			Mode: 0644,
+			Size: int64(len(content)),
+		}
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+
+		if _, err := tw.Write(content); err != nil {
+			return err
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return err
+	}
+
+	// Copy the tar archive to /run/ in the container (it will create /run/code/)
+	return c.d.CopyToContainer(ctx, containerID, "/run", &buf, container.CopyToContainerOptions{})
+}
+
+func (c *Client) ExecInExistingContainer(
+	ctx context.Context,
+	containerID string,
+	sb sandbox.Config,
+) (Result, error) {
+
+	execCtx, cancel := context.WithTimeout(ctx, sb.Timeout)
+	defer cancel()
+
+	execResp, err := c.d.ContainerExecCreate(execCtx, containerID, container.ExecOptions{
+		Cmd:          append([]string{"sh", "-c"}, quoteCmd(sb.ExecCmd)...),
+		AttachStdout: true,
+		AttachStderr: true,
+		AttachStdin:  true,
+		Tty:          false,
+		WorkingDir:   "/app",
+	})
+	if err != nil {
+		return Result{}, err
+	}
+
+	attach, err := c.d.ContainerExecAttach(execCtx, execResp.ID, container.ExecStartOptions{})
+	if err != nil {
+		return Result{}, err
+	}
+	defer attach.Close()
+
+	// write stdin
+	go func() {
+		if sb.Stdin != "" {
+			attach.Conn.Write([]byte(sb.Stdin))
+		}
+		if closer, ok := attach.Conn.(interface{ CloseWrite() error }); ok {
+			closer.CloseWrite()
+		}
+	}()
+
+	var stdout, stderr bytes.Buffer
+	_, err = stdcopy.StdCopy(&stdout, &stderr, attach.Reader)
+	if err != nil {
+		return Result{}, err
+	}
+
+	inspect, err := c.d.ContainerExecInspect(execCtx, execResp.ID)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: inspect.ExitCode,
+	}, nil
+}
+
+func quoteCmd(cmd []string) []string {
+	if len(cmd) == 0 {
+		return cmd
+	}
+	// Build command string with PATH exported for sh
+	cmdStr := "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin:/go/bin; "
+	for i, part := range cmd {
+		if i > 0 {
+			cmdStr += " "
+		}
+		cmdStr += fmt.Sprintf("%q", part)
+	}
+	return []string{cmdStr}
 }

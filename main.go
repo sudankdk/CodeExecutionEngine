@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 
 	executer "github.com/sudankdk/ceev2/internal/Executer"
@@ -12,7 +11,6 @@ import (
 )
 
 func main() {
-	fmt.Println("on some bullshit")
 	langs, err := languages.Load("internal/languages/languages.json")
 	if err != nil {
 		log.Fatalf("failed to load languages: %v", err)
@@ -23,7 +21,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pooling.PreWarm(ctx, langs)
-	// Removed zombie cleanup for now
 	server := api.NewServer(exec)
 	if err = server.StartServer(); err != nil {
 		cancel()

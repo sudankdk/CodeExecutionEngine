@@ -62,7 +62,7 @@ func (pm *PoolManager) PreWarm(ctx context.Context, langs languages.LanguageMap)
 
 	for _, lang := range langs {
 
-		for i := 0; i < 3; i++ {
+		for i := 0; i < 1; i++ {
 			id, err := pm.createPoolContainer(ctx, lang.Image)
 			if err != nil {
 				return err

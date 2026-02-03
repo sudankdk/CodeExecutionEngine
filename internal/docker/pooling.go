@@ -2,10 +2,12 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/sudankdk/ceev2/internal/languages"
 )
 
@@ -30,6 +32,7 @@ func NewPoolManager(c *Client) *PoolManager {
 }
 
 func (pm *PoolManager) createPoolContainer(ctx context.Context, image string) (string, error) {
+
 	resp, err := pm.client.d.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -61,8 +64,19 @@ func (pm *PoolManager) createPoolContainer(ctx context.Context, image string) (s
 func (pm *PoolManager) PreWarm(ctx context.Context, langs languages.LanguageMap) error {
 
 	for _, lang := range langs {
+		totalContainers := 1
 
-		for i := 0; i < 1; i++ {
+		containers, err := pm.ListContainers(ctx, lang)
+		if err != nil {
+			return err
+		}
+
+		if len(containers) == totalContainers {
+			continue
+		}
+
+		containersToCreate := totalContainers - len(containers)
+		for i := 0; i < containersToCreate; i++ {
 			id, err := pm.createPoolContainer(ctx, lang.Image)
 			if err != nil {
 				return err
@@ -78,6 +92,7 @@ func (pm *PoolManager) PreWarm(ctx context.Context, langs languages.LanguageMap)
 			pm.mu.Unlock()
 		}
 	}
+
 	return nil
 }
 
@@ -99,4 +114,39 @@ func (pm *PoolManager) Release(cont *PoolContainer) {
 	cont.Status = "idle"
 	cont.LastUsed = time.Now()
 	pm.mu.Unlock()
+}
+
+func (pm *PoolManager) ListContainers(ctx context.Context, lang languages.Language) ([]*PoolContainer, error) {
+	args := filters.NewArgs()
+	args.Add("label", "pool=true")
+	args.Add("label", fmt.Sprintf("pool.image=%s", lang.Image))
+
+	containers, err := pm.client.d.ContainerList(ctx, container.ListOptions{
+		Filters: args,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var poolContainers []*PoolContainer
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	for _, c := range containers {
+		if _, exists := pm.pool[c.ID]; !exists {
+			status := "idle"
+			if c.State != "running" {
+				status = "stopped"
+			}
+			pm.pool[c.ID] = &PoolContainer{
+				ID:       c.ID,
+				Status:   status,
+				LastUsed: time.Now(),
+				Image:    c.Image,
+			}
+		}
+		poolContainers = append(poolContainers, pm.pool[c.ID])
+	}
+
+	return poolContainers, nil
 }
